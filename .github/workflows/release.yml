@@ -1,0 +1,47 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Create release archive
+        run: |
+          mkdir -p dist
+          cp sideload.py install.sh uninstall.sh LICENSE README.md dist/
+          cd dist && tar -czvf ../sideload-${{ github.ref_name }}.tar.gz *
+          cd .. && zip -j sideload-${{ github.ref_name }}.zip dist/*
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            sideload-${{ github.ref_name }}.tar.gz
+            sideload-${{ github.ref_name }}.zip
+          body: |
+            ## Sideload ${{ github.ref_name }}
+            
+            ### 安装
+            ```bash
+            # 下载并解压
+            tar -xzf sideload-${{ github.ref_name }}.tar.gz
+            
+            # 安装
+            ./install.sh
+            ```
+            
+            ### 依赖
+            ```bash
+            sudo dnf install python3-gobject gtk4 libadwaita
+            ```
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
