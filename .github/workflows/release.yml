@@ -9,42 +9,183 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  build-deb:
     runs-on: ubuntu-latest
-    
     steps:
       - uses: actions/checkout@v4
       
-      - name: Create release archive
+      - name: Build DEB package
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          PKG_DIR=sideload_${VERSION}_all
+          
+          mkdir -p $PKG_DIR/DEBIAN
+          mkdir -p $PKG_DIR/usr/bin
+          mkdir -p $PKG_DIR/usr/share/sideload
+          mkdir -p $PKG_DIR/usr/share/applications
+          
+          cp sideload.py $PKG_DIR/usr/share/sideload/
+          chmod +x $PKG_DIR/usr/share/sideload/sideload.py
+          
+          cat > $PKG_DIR/usr/bin/sideload << 'EOF'
+          #!/bin/bash
+          exec python3 /usr/share/sideload/sideload.py "$@"
+          EOF
+          chmod +x $PKG_DIR/usr/bin/sideload
+          
+          cat > $PKG_DIR/usr/share/applications/io.github.shiro.Sideload.desktop << EOF
+          [Desktop Entry]
+          Name=Sideload
+          Comment=Install third-party packages
+          Exec=sideload %F
+          Icon=package-x-generic
+          Type=Application
+          Categories=System;PackageManager;
+          MimeType=application/vnd.debian.binary-package;application/x-compressed-tar;
+          EOF
+          
+          cat > $PKG_DIR/DEBIAN/control << EOF
+          Package: sideload
+          Version: ${VERSION}
+          Section: admin
+          Priority: optional
+          Architecture: all
+          Depends: python3, python3-gi, gir1.2-gtk-4.0, gir1.2-adw-1
+          Maintainer: Shiro <shiro@example.com>
+          Description: Install third-party packages on Fedora/GNOME
+           A GTK4 application for installing DEB and tar.gz packages
+           with Distrobox container support.
+          EOF
+          
+          dpkg-deb --build $PKG_DIR
+          mv ${PKG_DIR}.deb sideload_${VERSION}_all.deb
+      
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-package
+          path: "*.deb"
+
+  build-rpm:
+    runs-on: ubuntu-latest
+    container: fedora:latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install build tools
+        run: dnf install -y rpm-build rpmdevtools
+      
+      - name: Build RPM package
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          
+          rpmdev-setuptree
+          
+          mkdir -p ~/rpmbuild/SOURCES
+          tar -czvf ~/rpmbuild/SOURCES/sideload-${VERSION}.tar.gz \
+            --transform "s,^,sideload-${VERSION}/," \
+            sideload.py LICENSE README.md
+          
+          cat > ~/rpmbuild/SPECS/sideload.spec << EOF
+          Name:           sideload
+          Version:        ${VERSION}
+          Release:        1%{?dist}
+          Summary:        Install third-party packages on Fedora/GNOME
+          License:        MIT
+          URL:            https://github.com/shiro123444/sideload
+          Source0:        %{name}-%{version}.tar.gz
+          BuildArch:      noarch
+          Requires:       python3, python3-gobject, gtk4, libadwaita
+          
+          %description
+          A GTK4 application for installing DEB and tar.gz packages
+          with Distrobox container support.
+          
+          %prep
+          %autosetup
+          
+          %install
+          mkdir -p %{buildroot}%{_bindir}
+          mkdir -p %{buildroot}%{_datadir}/sideload
+          mkdir -p %{buildroot}%{_datadir}/applications
+          
+          install -m 755 sideload.py %{buildroot}%{_datadir}/sideload/
+          
+          cat > %{buildroot}%{_bindir}/sideload << 'LAUNCHER'
+          #!/bin/bash
+          exec python3 /usr/share/sideload/sideload.py "\$@"
+          LAUNCHER
+          chmod +x %{buildroot}%{_bindir}/sideload
+          
+          cat > %{buildroot}%{_datadir}/applications/io.github.shiro.Sideload.desktop << DESKTOP
+          [Desktop Entry]
+          Name=Sideload
+          Comment=Install third-party packages
+          Exec=sideload %F
+          Icon=package-x-generic
+          Type=Application
+          Categories=System;PackageManager;
+          MimeType=application/vnd.debian.binary-package;application/x-compressed-tar;
+          DESKTOP
+          
+          %files
+          %license LICENSE
+          %doc README.md
+          %{_bindir}/sideload
+          %{_datadir}/sideload/
+          %{_datadir}/applications/io.github.shiro.Sideload.desktop
+          EOF
+          
+          rpmbuild -ba ~/rpmbuild/SPECS/sideload.spec
+          cp ~/rpmbuild/RPMS/noarch/*.rpm .
+      
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rpm-package
+          path: "*.rpm"
+
+  release:
+    needs: [build-deb, build-rpm]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      
+      - name: Create source archive
         run: |
           mkdir -p dist
           cp sideload.py install.sh uninstall.sh LICENSE README.md dist/
           cd dist && tar -czvf ../sideload-${{ github.ref_name }}.tar.gz *
-          cd .. && zip -j sideload-${{ github.ref_name }}.zip dist/*
       
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
             sideload-${{ github.ref_name }}.tar.gz
-            sideload-${{ github.ref_name }}.zip
+            artifacts/deb-package/*.deb
+            artifacts/rpm-package/*.rpm
           body: |
             ## Sideload ${{ github.ref_name }}
             
             ### 安装
-            ```bash
-            # 下载并解压
-            tar -xzf sideload-${{ github.ref_name }}.tar.gz
             
-            # 安装
+            **Fedora (RPM)**
+            ```bash
+            sudo dnf install ./sideload-*.rpm
+            ```
+            
+            **Debian/Ubuntu (DEB)**
+            ```bash
+            sudo dpkg -i sideload_*.deb
+            sudo apt-get install -f
+            ```
+            
+            **手动安装**
+            ```bash
+            tar -xzf sideload-${{ github.ref_name }}.tar.gz
             ./install.sh
             ```
-            
-            ### 依赖
-            ```bash
-            sudo dnf install python3-gobject gtk4 libadwaita
-            ```
-          draft: false
-          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
