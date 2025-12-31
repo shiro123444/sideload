@@ -17,7 +17,7 @@ jobs:
       - name: Build DEB package
         run: |
           VERSION=${GITHUB_REF_NAME#v}
-          PKG_DIR=sideload_${VERSION}_all
+          PKG_DIR=sideload-deb
           
           mkdir -p $PKG_DIR/DEBIAN
           mkdir -p $PKG_DIR/usr/bin
@@ -57,8 +57,7 @@ jobs:
            with Distrobox container support.
           EOF
           
-          dpkg-deb --build $PKG_DIR
-          mv ${PKG_DIR}.deb sideload_${VERSION}_all.deb
+          dpkg-deb --build $PKG_DIR sideload_${VERSION}_all.deb
       
       - uses: actions/upload-artifact@v4
         with:
