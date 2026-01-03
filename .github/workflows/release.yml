@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -16,7 +19,11 @@ jobs:
       
       - name: Build DEB package
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
+          if [[ $GITHUB_REF_TYPE == "tag" ]]; then
+            VERSION=${GITHUB_REF_NAME#v}
+          else
+            VERSION="0.0.0.$(date +%Y%m%d)"
+          fi
           PKG_DIR=sideload-deb
           
           mkdir -p $PKG_DIR/DEBIAN
@@ -75,7 +82,11 @@ jobs:
       
       - name: Build RPM package
         run: |
-          VERSION=${GITHUB_REF_NAME#v}
+          if [[ $GITHUB_REF_TYPE == "tag" ]]; then
+            VERSION=${GITHUB_REF_NAME#v}
+          else
+            VERSION="0.0.0.$(date +%Y%m%d)"
+          fi
           
           rpmdev-setuptree
           
@@ -160,6 +171,7 @@ jobs:
       
       - name: Create Release
         uses: softprops/action-gh-release@v1
+        if: startsWith(github.ref, 'refs/tags/')
         with:
           files: |
             sideload-${{ github.ref_name }}.tar.gz
@@ -185,6 +197,37 @@ jobs:
             ```bash
             tar -xzf sideload-${{ github.ref_name }}.tar.gz
             ./install.sh
+            ```
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Update Nightly Release
+        uses: softprops/action-gh-release@v1
+        if: github.ref == 'refs/heads/main'
+        with:
+          tag_name: nightly
+          name: Nightly Build
+          prerelease: true
+          files: |
+            sideload-${{ github.ref_name }}.tar.gz
+            artifacts/deb-package/*.deb
+            artifacts/rpm-package/*.rpm
+          body: |
+            ## Sideload Nightly Build
+            
+            这是自动构建的最新版本。
+            
+            ### 安装
+            
+            **Fedora (RPM)**
+            ```bash
+            sudo dnf install ./sideload-*.rpm
+            ```
+            
+            **Debian/Ubuntu (DEB)**
+            ```bash
+            sudo dpkg -i sideload_*.deb
+            sudo apt-get install -f
             ```
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

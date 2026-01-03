@@ -25,7 +25,7 @@
 sudo dnf install python3-gobject gtk4 libadwaita
 
 # 安装
-git clone https://github.com/yourname/sideload.git
+git clone https://github.com/shiro123444/sideload.git
 cd sideload
 ./install.sh
 ```

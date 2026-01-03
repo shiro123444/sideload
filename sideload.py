@@ -308,19 +308,27 @@ class PackageInstaller:
         app_name_lower = app_name.lower().replace(' ', '-')
         
         share_dir = pkg.extract_dir / 'usr' / 'share'
+        lib_dir = pkg.extract_dir / 'usr' / 'lib'
         main_app_dir = None
         executable_path = None
         
         # 查找程序目录
-        for name in [app_name_lower, app_name, pkg.path.stem.split('_')[0]]:
-            candidate = share_dir / name
-            if candidate.exists() and candidate.is_dir():
-                main_app_dir = candidate
-                break
+        search_names = [app_name_lower, app_name, pkg.path.stem.split('_')[0]]
         
-        if not main_app_dir:
+        # 1. 在 share 和 lib 中按名称查找
+        for base_dir in [share_dir, lib_dir]:
+            if not base_dir.exists(): continue
+            for name in search_names:
+                candidate = base_dir / name
+                if candidate.exists() and candidate.is_dir():
+                    main_app_dir = candidate
+                    break
+            if main_app_dir: break
+        
+        # 2. 如果没找到，在 share 中模糊查找
+        if not main_app_dir and share_dir.exists():
             skip_dirs = {'applications', 'icons', 'pixmaps', 'doc', 'man', 
-                        'appdata', 'metainfo', 'bash-completion', 'zsh'}
+                        'appdata', 'metainfo', 'bash-completion', 'zsh', 'common-licenses'}
             for d in share_dir.iterdir():
                 if d.is_dir() and d.name not in skip_dirs:
                     main_app_dir = d
@@ -340,6 +348,23 @@ class PackageInstaller:
                     break
             
             if not executable_path:
+                # 尝试按名称查找
+                for name in [app_name_lower, app_name]:
+                    candidate = install_dir / name
+                    if candidate.exists():
+                        candidate.chmod(0o755)
+                        executable_path = candidate
+                        break
+            
+            if not executable_path:
+                # 递归查找任何可执行文件
+                for root, dirs, files in os.walk(install_dir):
+                    for file in files:
+                        path = Path(root) / file
+                        if os.access(path, os.X_OK) and not path.suffix in ['.so', '.a', '.sh', '.png', '.svg', '.jpg']:
+                            executable_path = path
+                            break
+                    if executable_path: break
                 for name in [app_name_lower, app_name]:
                     candidate = install_dir / name
                     if candidate.exists():
