@@ -307,88 +307,121 @@ class PackageInstaller:
         app_name = pkg.name
         app_name_lower = app_name.lower().replace(' ', '-')
         
-        share_dir = pkg.extract_dir / 'usr' / 'share'
-        lib_dir = pkg.extract_dir / 'usr' / 'lib'
-        main_app_dir = None
-        executable_path = None
+        # 1. 寻找主程序目录 (优先级: opt > usr/lib > usr/share)
+        source_dir = None
+        install_mode = "dir" # dir or bin
         
-        # 查找程序目录
-        search_names = [app_name_lower, app_name, pkg.path.stem.split('_')[0]]
-        
-        # 1. 在 share 和 lib 中按名称查找
-        for base_dir in [share_dir, lib_dir]:
-            if not base_dir.exists(): continue
-            for name in search_names:
-                candidate = base_dir / name
-                if candidate.exists() and candidate.is_dir():
-                    main_app_dir = candidate
-                    break
-            if main_app_dir: break
-        
-        # 2. 如果没找到，在 share 中模糊查找
-        if not main_app_dir and share_dir.exists():
-            skip_dirs = {'applications', 'icons', 'pixmaps', 'doc', 'man', 
-                        'appdata', 'metainfo', 'bash-completion', 'zsh', 'common-licenses'}
-            for d in share_dir.iterdir():
-                if d.is_dir() and d.name not in skip_dirs:
-                    main_app_dir = d
-                    break
-        
-        # 安装主程序
-        if main_app_dir:
-            install_dir = self.install_base / app_name_lower
-            if install_dir.exists():
-                shutil.rmtree(install_dir)
-            shutil.copytree(main_app_dir, install_dir)
-            
-            # 查找可执行文件
-            for f in install_dir.iterdir():
-                if f.is_file() and os.access(f, os.X_OK):
-                    executable_path = f
-                    break
-            
-            if not executable_path:
-                # 尝试按名称查找
-                for name in [app_name_lower, app_name]:
-                    candidate = install_dir / name
-                    if candidate.exists():
-                        candidate.chmod(0o755)
-                        executable_path = candidate
-                        break
-            
-            if not executable_path:
-                # 递归查找任何可执行文件
-                for root, dirs, files in os.walk(install_dir):
-                    for file in files:
-                        path = Path(root) / file
-                        if os.access(path, os.X_OK) and not path.suffix in ['.so', '.a', '.sh', '.png', '.svg', '.jpg']:
-                            executable_path = path
-                            break
-                    if executable_path: break
-                for name in [app_name_lower, app_name]:
-                    candidate = install_dir / name
-                    if candidate.exists():
-                        candidate.chmod(0o755)
-                        executable_path = candidate
-                        break
-            
-            # 创建符号链接
-            if executable_path:
-                link_path = self.bin_dir / app_name_lower
-                if link_path.exists() or link_path.is_symlink():
-                    link_path.unlink()
-                link_path.symlink_to(executable_path)
-        
-        # 安装 /opt 目录
+        # 检查 /opt
         opt_dir = pkg.extract_dir / 'opt'
         if opt_dir.exists():
-            for app_dir in opt_dir.iterdir():
-                if app_dir.is_dir():
-                    install_dir = self.install_base / app_dir.name
-                    if install_dir.exists():
-                        shutil.rmtree(install_dir)
-                    shutil.copytree(app_dir, install_dir)
+            for d in opt_dir.iterdir():
+                if d.is_dir():
+                    source_dir = d
+                    break
         
+        # 检查 usr/lib 和 usr/share
+        if not source_dir:
+            search_dirs = [
+                pkg.extract_dir / 'usr' / 'lib',
+                pkg.extract_dir / 'usr' / 'share'
+            ]
+            search_names = [app_name_lower, app_name, pkg.path.stem.split('_')[0]]
+            
+            for base_dir in search_dirs:
+                if not base_dir.exists(): continue
+                for name in search_names:
+                    candidate = base_dir / name
+                    if candidate.exists() and candidate.is_dir():
+                        source_dir = candidate
+                        break
+                if source_dir: break
+        
+        # 检查 usr/bin (如果没找到目录，可能是散装的)
+        if not source_dir:
+            bin_dir = pkg.extract_dir / 'usr' / 'bin'
+            if bin_dir.exists() and any(bin_dir.iterdir()):
+                source_dir = bin_dir
+                install_mode = "bin"
+
+        executable_path = None
+        final_install_dir = self.install_base / app_name_lower
+
+        # 2. 执行安装
+        if source_dir:
+            if final_install_dir.exists():
+                shutil.rmtree(final_install_dir)
+            
+            if install_mode == "dir":
+                # 复制整个目录
+                shutil.copytree(source_dir, final_install_dir)
+                
+                # 在安装目录中查找可执行文件
+                # 优先级: 同名文件 > 任何可执行文件
+                candidates = []
+                for root, dirs, files in os.walk(final_install_dir):
+                    for file in files:
+                        path = Path(root) / file
+                        if os.access(path, os.X_OK) and not path.suffix in ['.so', '.a', '.sh', '.png', '.svg', '.jpg', '.txt', '.md']:
+                            candidates.append(path)
+                
+                # 筛选最佳候选
+                for c in candidates:
+                    if c.stem.lower() in [app_name_lower, app_name.lower(), 'kiro-account-manager']:
+                        executable_path = c
+                        break
+                
+                if not executable_path and candidates:
+                    executable_path = candidates[0] # 默认取第一个
+                    
+            elif install_mode == "bin":
+                # 复制 bin 目录内容
+                final_install_dir.mkdir(parents=True, exist_ok=True)
+                for f in source_dir.iterdir():
+                    if f.is_file():
+                        shutil.copy2(f, final_install_dir)
+                        if f.stem.lower() == app_name_lower:
+                            executable_path = final_install_dir / f.name
+                
+                if not executable_path:
+                     # 找一个看起来像主程序的
+                    for f in final_install_dir.iterdir():
+                        if os.access(f, os.X_OK):
+                            executable_path = f
+                            break
+
+        # 3. 处理依赖库 (usr/lib)
+        # 如果有 usr/lib，将其复制到安装目录下的 lib 文件夹，以便设置 LD_LIBRARY_PATH
+        pkg_lib_dir = pkg.extract_dir / 'usr' / 'lib'
+        if pkg_lib_dir.exists() and final_install_dir.exists():
+            target_lib_dir = final_install_dir / 'lib'
+            # 如果是 bin 模式，或者 dir 模式下没有 lib 目录，则复制
+            if not target_lib_dir.exists():
+                try:
+                    shutil.copytree(pkg_lib_dir, target_lib_dir, dirs_exist_ok=True)
+                except Exception as e:
+                    logger.warning(f"复制库文件失败: {e}")
+
+        # 4. 创建启动脚本 (Wrapper)
+        if executable_path:
+            wrapper_path = self.bin_dir / app_name_lower
+            
+            # 构建 LD_LIBRARY_PATH
+            lib_paths = []
+            if (final_install_dir / 'lib').exists():
+                lib_paths.append(str(final_install_dir / 'lib'))
+            if (final_install_dir / 'usr' / 'lib').exists(): # 有些结构保留了 usr/lib
+                lib_paths.append(str(final_install_dir / 'usr' / 'lib'))
+            
+            ld_path_str = f"export LD_LIBRARY_PATH=\"{':'.join(lib_paths)}:$LD_LIBRARY_PATH\"" if lib_paths else ""
+            
+            with open(wrapper_path, 'w') as f:
+                f.write('#!/bin/bash\n')
+                if ld_path_str:
+                    f.write(f'{ld_path_str}\n')
+                f.write(f'exec "{executable_path}" "$@"\n')
+            
+            wrapper_path.chmod(0o755)
+
         # 安装图标
         self._install_icon(pkg)
         
