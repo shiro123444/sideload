@@ -181,8 +181,16 @@ class Package:
     def _parse_desktop_file(self, path: Path):
         """解析 .desktop 文件"""
         try:
+            in_desktop_entry = False
             with open(path, 'r', encoding='utf-8') as f:
                 for line in f:
+                    line = line.strip()
+                    # 只解析 [Desktop Entry] 部分，遇到其他 section 就停止
+                    if line.startswith('['):
+                        in_desktop_entry = (line == '[Desktop Entry]')
+                        continue
+                    if not in_desktop_entry:
+                        continue
                     if line.startswith('Name='):
                         self.name = line.split('=', 1)[1].strip()
                     elif line.startswith('Comment='):
