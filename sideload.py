@@ -452,15 +452,27 @@ class PackageInstaller:
         if not executables:
             return InstallResult(False, "未找到可执行文件")
         
+        # 确定源目录：如果 extract_dir 只有一个子目录，使用该子目录
+        source_dir = pkg.extract_dir
+        subdirs = [d for d in pkg.extract_dir.iterdir() if d.is_dir()]
+        if len(subdirs) == 1 and not list(pkg.extract_dir.glob('*.*')):
+            # 只有一个子目录且没有顶层文件，使用子目录作为源
+            source_dir = subdirs[0]
+            logger.info(f"检测到单目录结构，使用: {source_dir.name}")
+        
         # 安装到用户目录
         install_dir = self.install_base / app_name_lower
         if install_dir.exists():
             shutil.rmtree(install_dir)
-        shutil.copytree(pkg.extract_dir, install_dir)
+        shutil.copytree(source_dir, install_dir)
         
-        # 创建符号链接
+        # 创建符号链接 - 重新计算可执行文件路径
         main_exec = executables[0]
-        rel_path = main_exec.relative_to(pkg.extract_dir)
+        if source_dir != pkg.extract_dir:
+            # 如果使用了子目录，需要调整相对路径
+            rel_path = main_exec.relative_to(source_dir)
+        else:
+            rel_path = main_exec.relative_to(pkg.extract_dir)
         actual_exec = install_dir / rel_path
         
         link_path = self.bin_dir / app_name_lower
